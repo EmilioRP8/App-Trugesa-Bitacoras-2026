@@ -1,36 +1,53 @@
-import streamlit as st
+import os
 import sqlite3
 from datetime import datetime, date, timedelta
-import pandas as pd
 
-# =========================================================
-# CONFIGURACIÓN
-# =========================================================
+import pandas as pd
+import streamlit as st
+
+
+# ==========================================================
+# CONFIGURACIÓN GENERAL
+# ==========================================================
 
 st.set_page_config(
-    page_title="TRUGESA | Bitácoras Operativas",
-    page_icon="🚛",
+    page_title="Bitácoras TRUGESA",
     layout="wide"
 )
 
 DB_NAME = "bitacoras_trugesa.db"
 
 
-# =========================================================
+# ==========================================================
+# RUTA DEL LOGO
+# ==========================================================
+
+img_path = os.path.join(
+    os.path.dirname(__file__),
+    "tr.png"
+)
+
+
+# ==========================================================
 # BASE DE DATOS
-# =========================================================
+# ==========================================================
 
 def conectar():
-    return sqlite3.connect(DB_NAME, check_same_thread=False)
+    return sqlite3.connect(
+        DB_NAME,
+        check_same_thread=False
+    )
 
 
 def crear_bd():
+
     conn = conectar()
     cur = conn.cursor()
 
-    # ---------------------------------------------
-    # BITÁCORAS
-    # ---------------------------------------------
+    # ------------------------------------------------------
+    # BITÁCORAS / JORNADAS
+    # ------------------------------------------------------
+
     cur.execute("""
         CREATE TABLE IF NOT EXISTS bitacoras (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -43,19 +60,23 @@ def crear_bd():
             ruta TEXT,
             hora_programada TEXT,
             estado TEXT DEFAULT 'ABIERTA',
+            fecha_hora_inicio TEXT,
             lugar_cierre TEXT,
             fecha_hora_cierre TEXT
         )
     """)
 
-    # ---------------------------------------------
+    # ------------------------------------------------------
     # EVENTOS
-    # ---------------------------------------------
+    # ------------------------------------------------------
+
     cur.execute("""
         CREATE TABLE IF NOT EXISTS eventos (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             bitacora_id INTEGER NOT NULL,
+
             fecha_hora TEXT NOT NULL,
+
             tipo_evento TEXT NOT NULL,
             lugar TEXT NOT NULL,
 
@@ -76,7 +97,8 @@ def crear_bd():
             editado INTEGER DEFAULT 0,
             fecha_hora_edicion TEXT,
 
-            FOREIGN KEY(bitacora_id) REFERENCES bitacoras(id)
+            FOREIGN KEY(bitacora_id)
+            REFERENCES bitacoras(id)
         )
     """)
 
@@ -87,20 +109,9 @@ def crear_bd():
 crear_bd()
 
 
-# =========================================================
-# CATÁLOGOS INICIALES
-# =========================================================
-
-# Más adelante estos se pueden cargar desde Excel
-# o desde un módulo administrativo.
-
-UNIDADES = [
-    "ECO-001",
-    "ECO-002",
-    "ECO-003",
-    "ECO-004",
-    "ECO-005",
-]
+# ==========================================================
+# CATÁLOGOS
+# ==========================================================
 
 CLIENTES = [
     "SESÉ",
@@ -111,39 +122,61 @@ CLIENTES = [
     "OTRO"
 ]
 
+UNIDADES = [
+    "ECO-001",
+    "ECO-002",
+    "ECO-003",
+    "ECO-004",
+    "ECO-005"
+]
+
 OPERADORES = [
     "Operador 1",
     "Operador 2",
-    "Operador 3",
+    "Operador 3"
 ]
 
 SUPERVISORES = [
     "Supervisor 1",
     "Supervisor 2",
-    "Supervisor 3",
+    "Supervisor 3"
 ]
 
 
-# =========================================================
-# FUNCIONES
-# =========================================================
+# ==========================================================
+# FUNCIONES GENERALES
+# ==========================================================
 
-def generar_identificador(cliente, fecha, unidad):
-    fecha_txt = fecha.strftime("%d-%m-%Y")
-    return f"{cliente.upper()} - {fecha_txt} - {unidad.upper()}"
+def generar_identificador(
+    cliente,
+    fecha_servicio,
+    unidad
+):
+
+    return (
+        f"{cliente.upper()} - "
+        f"{fecha_servicio.strftime('%d-%m-%Y')} - "
+        f"{unidad.upper()}"
+    )
 
 
-def obtener_bitacoras(solo_abiertas=False):
+def obtener_bitacoras(
+    solo_abiertas=False
+):
+
     conn = conectar()
 
     if solo_abiertas:
+
         df = pd.read_sql_query("""
             SELECT *
             FROM bitacoras
             WHERE estado = 'ABIERTA'
             ORDER BY id DESC
         """, conn)
+
     else:
+
         df = pd.read_sql_query("""
             SELECT *
             FROM bitacoras
@@ -151,10 +184,14 @@ def obtener_bitacoras(solo_abiertas=False):
         """, conn)
 
     conn.close()
+
     return df
 
 
-def obtener_eventos(bitacora_id):
+def obtener_eventos(
+    bitacora_id
+):
+
     conn = conectar()
 
     df = pd.read_sql_query("""
@@ -162,145 +199,328 @@ def obtener_eventos(bitacora_id):
         FROM eventos
         WHERE bitacora_id = ?
         ORDER BY fecha_hora ASC
-    """, conn, params=(bitacora_id,))
+    """,
+    conn,
+    params=(bitacora_id,)
+    )
 
     conn.close()
+
     return df
 
 
-def calcular_desviacion(hora_programada):
-    if not hora_programada:
+def calcular_desviacion(
+    hora_programada_evento
+):
+
+    if not hora_programada_evento:
         return None
 
     ahora = datetime.now()
 
-    try:
-        hora_obj = datetime.strptime(hora_programada, "%H:%M").time()
+    hora_obj = datetime.strptime(
+        hora_programada_evento,
+        "%H:%M"
+    ).time()
 
-        programado = datetime.combine(
-            ahora.date(),
-            hora_obj
+    programado = datetime.combine(
+        ahora.date(),
+        hora_obj
+    )
+
+    diferencia = (
+        ahora - programado
+    )
+
+    return round(
+        diferencia.total_seconds() / 60
+    )
+
+
+def formatear_duracion(
+    segundos
+):
+
+    if segundos is None:
+        return "00:00"
+
+    segundos = int(segundos)
+
+    horas = segundos // 3600
+    minutos = (
+        segundos % 3600
+    ) // 60
+
+    return f"{horas:02d}:{minutos:02d}"
+
+
+def obtener_duracion_jornada(
+    bitacora_id
+):
+
+    eventos = obtener_eventos(
+        bitacora_id
+    )
+
+    if eventos.empty:
+        return "00:00"
+
+    eventos["fecha_hora_dt"] = pd.to_datetime(
+        eventos["fecha_hora"]
+    )
+
+    inicio = eventos[
+        "fecha_hora_dt"
+    ].min()
+
+    fin = eventos[
+        "fecha_hora_dt"
+    ].max()
+
+    segundos = (
+        fin - inicio
+    ).total_seconds()
+
+    return formatear_duracion(
+        segundos
+    )
+
+
+def calcular_tiempos_eventos(
+    eventos
+):
+
+    if eventos.empty:
+        return {
+            "movimiento": 0,
+            "espera": 0,
+            "incidencia": 0
+        }
+
+    eventos = eventos.copy()
+
+    eventos[
+        "fecha_hora_dt"
+    ] = pd.to_datetime(
+        eventos["fecha_hora"]
+    )
+
+    eventos = eventos.sort_values(
+        "fecha_hora_dt"
+    )
+
+    movimiento = 0
+    espera = 0
+    incidencia = 0
+
+    for i in range(
+        len(eventos) - 1
+    ):
+
+        actual = eventos.iloc[i]
+        siguiente = eventos.iloc[i + 1]
+
+        diferencia = (
+            siguiente["fecha_hora_dt"]
+            - actual["fecha_hora_dt"]
+        ).total_seconds()
+
+        tipo = actual[
+            "tipo_evento"
+        ]
+
+        if tipo in [
+            "Inicio de movimiento",
+            "Reinicio de movimiento"
+        ]:
+
+            movimiento += diferencia
+
+        elif tipo in [
+            "Inicio de espera",
+            "Detención"
+        ]:
+
+            if actual[
+                "incidencia"
+            ] == 1:
+
+                incidencia += diferencia
+
+            else:
+
+                espera += diferencia
+
+    return {
+        "movimiento": movimiento,
+        "espera": espera,
+        "incidencia": incidencia
+    }
+
+
+# ==========================================================
+# ENCABEZADO
+# ==========================================================
+
+col_logo, col_titulo = st.columns(
+    [1, 5]
+)
+
+with col_logo:
+
+    if os.path.exists(
+        img_path
+    ):
+
+        st.image(
+            img_path,
+            use_container_width=True
         )
 
-        diferencia = ahora - programado
+with col_titulo:
 
-        return round(diferencia.total_seconds() / 60)
+    st.markdown(
+        """
+        # **TRUGESA TRANSPORTACIÓN ESPECIALIZADA**
+        ## Sistema de Bitácoras Operativas
+        """
+    )
 
-    except:
-        return None
+    st.caption(
+        "Control de jornadas, movimientos, tiempos de espera, "
+        "estado de carga, incidencias y cierre de unidad."
+    )
 
-
-# =========================================================
-# CABECERA
-# =========================================================
-
-st.title("🚛 TRUGESA")
-st.subheader("Sistema de Bitácoras Operativas")
-
-st.caption(
-    "Control de jornadas, movimientos, tiempos de espera, "
-    "estado de carga, incidencias y cierre de unidad."
-)
 
 st.divider()
 
 
-# =========================================================
-# MENÚ PRINCIPAL
-# =========================================================
+# ==========================================================
+# NAVEGACIÓN INTERNA
+# ==========================================================
 
-pagina = st.sidebar.radio(
-    "Módulo",
+tab1, tab2, tab3, tab4 = st.tabs(
     [
-        "Supervisor | Crear bitácora",
-        "Operador | Registrar evento",
-        "Operador | Editar evento",
-        "Cerrar jornada",
-        "Consultar bitácoras"
+        "Crear jornada",
+        "Registrar evento",
+        "Editar evento",
+        "Consultar / Cerrar"
     ]
 )
 
 
-# =========================================================
-# 1. SUPERVISOR CREA BITÁCORA
-# =========================================================
+# ==========================================================
+# TAB 1 - CREAR JORNADA
+# ==========================================================
 
-if pagina == "Supervisor | Crear bitácora":
+with tab1:
 
-    st.header("Crear nueva bitácora")
-
-    st.info(
-        "La bitácora debe ser creada por el supervisor "
-        "antes de que el operador inicie la jornada."
+    st.header(
+        "Crear nueva jornada"
     )
 
-    col1, col2 = st.columns(2)
+    st.info(
+        "La jornada debe ser creada por el supervisor "
+        "antes de iniciar la operación."
+    )
+
+    col1, col2, col3 = st.columns(3)
 
     with col1:
 
         cliente = st.selectbox(
             "Cliente",
-            CLIENTES
+            CLIENTES,
+            key="crear_cliente"
         )
 
         if cliente == "OTRO":
+
             cliente = st.text_input(
-                "Nombre del cliente"
+                "Nombre del cliente",
+                key="crear_otro_cliente"
             )
-
-        fecha_servicio = st.date_input(
-            "Fecha",
-            value=date.today()
-        )
-
-        unidad = st.selectbox(
-            "¿En qué unidad se realizará el servicio?",
-            UNIDADES
-        )
-
-        operador = st.selectbox(
-            "Operador asignado",
-            OPERADORES
-        )
 
     with col2:
 
+        fecha_servicio = st.date_input(
+            "Fecha del servicio",
+            value=date.today(),
+            key="crear_fecha"
+        )
+
+    with col3:
+
+        unidad = st.selectbox(
+            "¿En qué unidad se realizará el servicio?",
+            UNIDADES,
+            key="crear_unidad"
+        )
+
+
+    col4, col5, col6 = st.columns(3)
+
+    with col4:
+
+        operador = st.selectbox(
+            "Operador asignado",
+            OPERADORES,
+            key="crear_operador"
+        )
+
+    with col5:
+
         supervisor = st.selectbox(
             "Supervisor responsable",
-            SUPERVISORES
+            SUPERVISORES,
+            key="crear_supervisor"
         )
 
-        ruta = st.text_input(
-            "Ruta / servicio asignado",
-            placeholder="Ej. SESÉ Puebla → Planta Querétaro"
-        )
+    with col6:
 
         hora_programada = st.time_input(
-            "Hora programada de inicio"
+            "Hora programada de inicio",
+            key="crear_hora"
         )
 
-    if cliente:
-        identificador = generar_identificador(
-            cliente,
-            fecha_servicio,
-            unidad
-        )
 
-        st.success(
-            f"Bitácora: **{identificador}**"
-        )
+    ruta = st.text_input(
+        "Ruta / servicio asignado",
+        placeholder="Ej. SESÉ Puebla → Planta Querétaro",
+        key="crear_ruta"
+    )
+
+
+    identificador = generar_identificador(
+        cliente,
+        fecha_servicio,
+        unidad
+    )
+
+
+    st.info(
+        f"**Bitácora:** {identificador}"
+    )
+
 
     if st.button(
         "Crear bitácora",
         type="primary",
-        use_container_width=True
+        use_container_width=True,
+        key="btn_crear"
     ):
 
         if not cliente:
-            st.error("Debes indicar un cliente.")
+
+            st.error(
+                "Debes indicar un cliente."
+            )
 
         elif not ruta:
-            st.error("Debes indicar la ruta o servicio.")
+
+            st.error(
+                "Debes indicar la ruta o servicio."
+            )
 
         else:
 
@@ -330,7 +550,9 @@ if pagina == "Supervisor | Crear bitácora":
                     operador,
                     supervisor,
                     ruta,
-                    hora_programada.strftime("%H:%M")
+                    hora_programada.strftime(
+                        "%H:%M"
+                    )
                 ))
 
                 conn.commit()
@@ -347,114 +569,155 @@ if pagina == "Supervisor | Crear bitácora":
                 )
 
             finally:
+
                 conn.close()
 
 
-# =========================================================
-# 2. OPERADOR REGISTRA EVENTOS
-# =========================================================
+# ==========================================================
+# TAB 2 - REGISTRAR EVENTO
+# ==========================================================
 
-elif pagina == "Operador | Registrar evento":
+with tab2:
 
-    st.header("Registrar evento")
+    st.header(
+        "Registrar evento"
+    )
 
-    bitacoras = obtener_bitacoras(
+    bitacoras_abiertas = obtener_bitacoras(
         solo_abiertas=True
     )
 
-    if bitacoras.empty:
+    if bitacoras_abiertas.empty:
 
         st.warning(
-            "No existen bitácoras abiertas."
+            "No existen jornadas abiertas."
         )
 
     else:
 
         opciones = {
-            row["identificador"]: row["id"]
-            for _, row in bitacoras.iterrows()
+            row["identificador"]:
+            row["id"]
+
+            for _, row
+            in bitacoras_abiertas.iterrows()
         }
 
         seleccion = st.selectbox(
             "Seleccionar bitácora",
-            opciones.keys()
+            list(opciones.keys()),
+            key="evento_bitacora"
         )
 
-        bitacora_id = opciones[seleccion]
+        bitacora_id = opciones[
+            seleccion
+        ]
 
-        datos = bitacoras[
-            bitacoras["id"] == bitacora_id
+        datos = bitacoras_abiertas[
+            bitacoras_abiertas["id"]
+            == bitacora_id
         ].iloc[0]
 
-        st.write(
-            f"**Operador:** {datos['operador']}"
-        )
 
-        st.write(
-            f"**Supervisor:** {datos['supervisor']}"
-        )
+        st.divider()
+
+
+        col_info1, col_info2, col_info3 = st.columns(3)
+
+        with col_info1:
+
+            st.metric(
+                "Unidad",
+                datos["unidad"]
+            )
+
+        with col_info2:
+
+            st.metric(
+                "Operador",
+                datos["operador"]
+            )
+
+        with col_info3:
+
+            st.metric(
+                "Supervisor",
+                datos["supervisor"]
+            )
+
 
         st.write(
             f"**Ruta:** {datos['ruta']}"
         )
 
+
         st.divider()
 
-        # -----------------------------------------
-        # TIPO DE EVENTO
-        # -----------------------------------------
 
-        tipo_evento = st.selectbox(
-            "¿Qué está ocurriendo?",
-            [
-                "Inicio de jornada",
-                "Inicio de movimiento",
-                "Llegada a punto",
-                "Inicio de espera",
-                "Fin de espera",
-                "Inicio de carga",
-                "Carga finalizada",
-                "Inicio de descarga",
-                "Descarga finalizada",
-                "Detención",
-                "Reinicio de movimiento",
-                "Otro"
-            ]
+        col_evento, col_lugar = st.columns(2)
+
+        with col_evento:
+
+            tipo_evento = st.selectbox(
+                "Tipo de evento",
+                [
+                    "Inicio de jornada",
+                    "Inicio de movimiento",
+                    "Llegada a punto",
+                    "Inicio de espera",
+                    "Fin de espera",
+                    "Inicio de carga",
+                    "Carga finalizada",
+                    "Inicio de descarga",
+                    "Descarga finalizada",
+                    "Detención",
+                    "Reinicio de movimiento",
+                    "Otro"
+                ],
+                key="evento_tipo"
+            )
+
+        with col_lugar:
+
+            lugar = st.text_input(
+                "Lugar",
+                placeholder="Ej. Planta SESÉ Puebla",
+                key="evento_lugar"
+            )
+
+
+        st.markdown(
+            "### Estado de carga"
         )
 
-        lugar = st.text_input(
-            "¿Dónde se encuentra?",
-            placeholder="Ej. Planta SESÉ Puebla"
-        )
-
-        # -----------------------------------------
-        # ESTADO DE CARGA
-        # -----------------------------------------
-
-        estado_carga = st.selectbox(
-            "Estado de la caja",
+        estado_carga = st.radio(
+            "Seleccionar estado de la caja",
             [
                 "Material / mercancía",
                 "Empaque vacío",
                 "Caja vacía",
                 "No aplica"
-            ]
+            ],
+            horizontal=True,
+            key="evento_carga"
         )
 
-        # -----------------------------------------
-        # ESPERAS
-        # -----------------------------------------
 
         motivo_espera = None
         detalle_espera = None
+
 
         if tipo_evento in [
             "Inicio de espera",
             "Detención"
         ]:
 
+            st.markdown(
+                "### Motivo de espera o detención"
+            )
+
             motivo_espera = st.selectbox(
-                "Motivo de la detención / espera",
+                "Motivo",
                 [
                     "Esperando andén",
                     "Carga",
@@ -469,23 +732,24 @@ elif pagina == "Operador | Registrar evento":
                     "Autoridad / retén",
                     "Descanso",
                     "Otro"
-                ]
+                ],
+                key="evento_motivo"
             )
 
             detalle_espera = st.text_area(
-                "Detalle",
-                placeholder=(
-                    "Ej. Unidad esperando disponibilidad "
-                    "de andén en planta."
-                )
+                "Descripción",
+                placeholder="Ej. Esperando disponibilidad de andén.",
+                key="evento_detalle"
             )
 
-        # -----------------------------------------
-        # HORARIO PROGRAMADO
-        # -----------------------------------------
+
+        st.markdown(
+            "### Control de horario"
+        )
 
         comparar_horario = st.checkbox(
-            "Este evento tenía una hora programada"
+            "Este evento tenía una hora programada",
+            key="evento_comparar"
         )
 
         hora_programada_evento = None
@@ -493,19 +757,24 @@ elif pagina == "Operador | Registrar evento":
         if comparar_horario:
 
             hora_temp = st.time_input(
-                "Hora programada del evento"
+                "Hora programada del evento",
+                key="evento_hora_programada"
             )
 
             hora_programada_evento = (
-                hora_temp.strftime("%H:%M")
+                hora_temp.strftime(
+                    "%H:%M"
+                )
             )
 
-        # -----------------------------------------
-        # INCIDENCIA
-        # -----------------------------------------
+
+        st.markdown(
+            "### Incidencias"
+        )
 
         incidencia = st.checkbox(
-            "⚠️ Existe una incidencia"
+            "Existe una incidencia durante este evento",
+            key="evento_incidencia"
         )
 
         tipo_incidencia = None
@@ -527,47 +796,69 @@ elif pagina == "Operador | Registrar evento":
                     "Seguridad",
                     "Autoridad / retén",
                     "Otro"
-                ]
+                ],
+                key="evento_tipo_incidencia"
             )
 
             descripcion_incidencia = st.text_area(
-                "Describe la incidencia"
+                "Descripción de la incidencia",
+                key="evento_desc_incidencia"
             )
 
-            st.info(
-                "En una versión posterior podremos agregar "
-                "carga de fotografías únicamente cuando "
-                "exista una incidencia."
-            )
 
-        # -----------------------------------------
-        # AVISO AL SUPERVISOR
-        # -----------------------------------------
-
-        supervisor_notificado = st.checkbox(
-            f"Confirmo que notifiqué a "
-            f"{datos['supervisor']} por WhatsApp."
+        st.markdown(
+            "### Confirmación de reporte"
         )
 
-        st.divider()
-
-        hora_actual = datetime.now()
-
-        st.write(
-            "**Hora del sistema:** "
-            + hora_actual.strftime(
-                "%d/%m/%Y %H:%M:%S"
-            )
+        notificado = st.checkbox(
+            (
+                f"Confirmo que notifiqué al supervisor "
+                f"{datos['supervisor']} por WhatsApp."
+            ),
+            key="evento_notificado"
         )
 
-        # -----------------------------------------
-        # GUARDAR
-        # -----------------------------------------
+
+        ahora = datetime.now()
+
+
+        col_hora1, col_hora2, col_hora3 = st.columns(3)
+
+        with col_hora1:
+
+            st.metric(
+                "Fecha",
+                ahora.strftime(
+                    "%d/%m/%Y"
+                )
+            )
+
+        with col_hora2:
+
+            st.metric(
+                "Hora del sistema",
+                ahora.strftime(
+                    "%H:%M:%S"
+                )
+            )
+
+        with col_hora3:
+
+            duracion_actual = obtener_duracion_jornada(
+                bitacora_id
+            )
+
+            st.metric(
+                "Tiempo registrado",
+                duracion_actual
+            )
+
 
         if st.button(
             "Registrar evento",
             type="primary",
-            use_container_width=True
+            use_container_width=True,
+            key="btn_evento"
         ):
 
             if not lugar:
@@ -576,11 +867,10 @@ elif pagina == "Operador | Registrar evento":
                     "Debes indicar el lugar."
                 )
 
-            elif not supervisor_notificado:
+            elif not notificado:
 
                 st.error(
-                    "Debes confirmar que notificaste "
-                    "al supervisor."
+                    "Debes confirmar el aviso al supervisor."
                 )
 
             else:
@@ -593,8 +883,13 @@ elif pagina == "Operador | Registrar evento":
                         hora_programada_evento
                     )
 
+
                 conn = conectar()
                 cur = conn.cursor()
+
+
+                ahora_registro = datetime.now()
+
 
                 cur.execute("""
                     INSERT INTO eventos (
@@ -615,7 +910,7 @@ elif pagina == "Operador | Registrar evento":
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, (
                     bitacora_id,
-                    datetime.now().isoformat(
+                    ahora_registro.isoformat(
                         timespec="seconds"
                     ),
                     tipo_evento,
@@ -631,61 +926,91 @@ elif pagina == "Operador | Registrar evento":
                     desviacion
                 ))
 
+
+                if tipo_evento == "Inicio de jornada":
+
+                    cur.execute("""
+                        UPDATE bitacoras
+                        SET fecha_hora_inicio = ?
+                        WHERE id = ?
+                    """, (
+                        ahora_registro.isoformat(
+                            timespec="seconds"
+                        ),
+                        bitacora_id
+                    ))
+
+
                 conn.commit()
                 conn.close()
 
+
                 st.success(
-                    "✅ Evento registrado."
+                    "Evento registrado correctamente."
                 )
 
                 st.rerun()
 
 
-# =========================================================
-# 3. EDITAR EVENTOS
-# =========================================================
+# ==========================================================
+# TAB 3 - EDITAR EVENTO
+# ==========================================================
 
-elif pagina == "Operador | Editar evento":
+with tab3:
 
-    st.header("Editar evento")
-
-    st.warning(
-        "Un evento solo puede modificarse durante "
-        "los primeros 5 minutos después de su registro."
+    st.header(
+        "Editar evento"
     )
 
-    bitacoras = obtener_bitacoras(
+    st.warning(
+        "El operador solo puede modificar un evento "
+        "durante los primeros 5 minutos."
+    )
+
+
+    bitacoras_abiertas = obtener_bitacoras(
         solo_abiertas=True
     )
 
-    if bitacoras.empty:
+
+    if bitacoras_abiertas.empty:
 
         st.warning(
-            "No existen bitácoras abiertas."
+            "No existen jornadas abiertas."
         )
 
     else:
 
         opciones = {
-            row["identificador"]: row["id"]
-            for _, row in bitacoras.iterrows()
+            row["identificador"]:
+            row["id"]
+
+            for _, row
+            in bitacoras_abiertas.iterrows()
         }
+
 
         seleccion = st.selectbox(
             "Seleccionar bitácora",
-            opciones.keys()
+            list(opciones.keys()),
+            key="editar_bitacora"
         )
 
-        bitacora_id = opciones[seleccion]
+
+        bitacora_id = opciones[
+            seleccion
+        ]
+
 
         eventos = obtener_eventos(
             bitacora_id
         )
 
+
         if eventos.empty:
 
             st.info(
-                "Esta bitácora todavía no tiene eventos."
+                "Esta jornada no tiene eventos."
             )
 
         else:
@@ -693,6 +1018,7 @@ elif pagina == "Operador | Editar evento":
             ahora = datetime.now()
 
             eventos_editables = []
+
 
             for _, row in eventos.iterrows():
 
@@ -712,16 +1038,17 @@ elif pagina == "Operador | Editar evento":
                         row
                     )
 
+
             if not eventos_editables:
 
                 st.info(
-                    "No hay eventos dentro del "
-                    "periodo permitido de edición."
+                    "No existen eventos editables."
                 )
 
             else:
 
                 opciones_evento = {}
+
 
                 for row in eventos_editables:
 
@@ -736,18 +1063,26 @@ elif pagina == "Operador | Editar evento":
                         etiqueta
                     ] = row["id"]
 
+
                 evento_sel = st.selectbox(
                     "Evento a corregir",
-                    opciones_evento.keys()
+                    list(
+                        opciones_evento.keys()
+                    ),
+                    key="evento_editar"
                 )
+
 
                 evento_id = opciones_evento[
                     evento_sel
                 ]
 
+
                 registro = eventos[
-                    eventos["id"] == evento_id
+                    eventos["id"]
+                    == evento_id
                 ].iloc[0]
+
 
                 nuevo_tipo = st.selectbox(
                     "Tipo de evento",
@@ -764,22 +1099,44 @@ elif pagina == "Operador | Editar evento":
                         "Detención",
                         "Reinicio de movimiento",
                         "Otro"
-                    ]
+                    ],
+                    index=0,
+                    key="editar_tipo"
                 )
+
 
                 nuevo_lugar = st.text_input(
                     "Lugar",
-                    value=registro["lugar"]
+                    value=registro[
+                        "lugar"
+                    ],
+                    key="editar_lugar"
                 )
+
+
+                nuevo_estado_carga = st.selectbox(
+                    "Estado de carga",
+                    [
+                        "Material / mercancía",
+                        "Empaque vacío",
+                        "Caja vacía",
+                        "No aplica"
+                    ],
+                    key="editar_carga"
+                )
+
 
                 if st.button(
                     "Guardar corrección",
-                    type="primary"
+                    type="primary",
+                    use_container_width=True,
+                    key="btn_editar"
                 ):
 
                     fecha_evento = datetime.fromisoformat(
                         registro["fecha_hora"]
                     )
+
 
                     if (
                         datetime.now()
@@ -789,8 +1146,7 @@ elif pagina == "Operador | Editar evento":
                     ):
 
                         st.error(
-                            "El periodo de edición "
-                            "ya terminó."
+                            "El periodo de edición ya terminó."
                         )
 
                     else:
@@ -798,25 +1154,30 @@ elif pagina == "Operador | Editar evento":
                         conn = conectar()
                         cur = conn.cursor()
 
+
                         cur.execute("""
                             UPDATE eventos
                             SET
                                 tipo_evento = ?,
                                 lugar = ?,
+                                estado_carga = ?,
                                 editado = 1,
                                 fecha_hora_edicion = ?
                             WHERE id = ?
                         """, (
                             nuevo_tipo,
                             nuevo_lugar,
+                            nuevo_estado_carga,
                             datetime.now().isoformat(
                                 timespec="seconds"
                             ),
                             evento_id
                         ))
 
+
                         conn.commit()
                         conn.close()
+
 
                         st.success(
                             "Evento corregido."
@@ -825,149 +1186,18 @@ elif pagina == "Operador | Editar evento":
                         st.rerun()
 
 
-# =========================================================
-# 4. CERRAR JORNADA
-# =========================================================
+# ==========================================================
+# TAB 4 - CONSULTAR / CERRAR
+# ==========================================================
 
-elif pagina == "Cerrar jornada":
+with tab4:
 
-    st.header("Cerrar jornada")
-
-    bitacoras = obtener_bitacoras(
-        solo_abiertas=True
+    st.header(
+        "Consultar jornadas"
     )
 
-    if bitacoras.empty:
-
-        st.success(
-            "No existen jornadas pendientes."
-        )
-
-    else:
-
-        opciones = {
-            row["identificador"]: row["id"]
-            for _, row in bitacoras.iterrows()
-        }
-
-        seleccion = st.selectbox(
-            "Seleccionar bitácora",
-            opciones.keys()
-        )
-
-        bitacora_id = opciones[
-            seleccion
-        ]
-
-        datos = bitacoras[
-            bitacoras["id"]
-            == bitacora_id
-        ].iloc[0]
-
-        st.write(
-            f"**Unidad:** {datos['unidad']}"
-        )
-
-        st.write(
-            f"**Operador:** {datos['operador']}"
-        )
-
-        lugar_cierre = st.text_input(
-            "¿Dónde quedará la unidad para descanso?",
-            placeholder=(
-                "Ej. Casa del operador, "
-                "Patio TRUGESA, Parador..."
-            )
-        )
-
-        supervisor_notificado = st.checkbox(
-            f"Confirmo que notifiqué a "
-            f"{datos['supervisor']} "
-            "la ubicación final de la unidad."
-        )
-
-        if st.button(
-            "Finalizar jornada",
-            type="primary",
-            use_container_width=True
-        ):
-
-            if not lugar_cierre:
-
-                st.error(
-                    "Debes indicar dónde quedó "
-                    "la unidad."
-                )
-
-            elif not supervisor_notificado:
-
-                st.error(
-                    "Debes confirmar el aviso "
-                    "al supervisor."
-                )
-
-            else:
-
-                conn = conectar()
-                cur = conn.cursor()
-
-                # Evento automático final
-                cur.execute("""
-                    INSERT INTO eventos (
-                        bitacora_id,
-                        fecha_hora,
-                        tipo_evento,
-                        lugar,
-                        estado_carga,
-                        supervisor_notificado
-                    )
-                    VALUES (?, ?, ?, ?, ?, ?)
-                """, (
-                    bitacora_id,
-                    datetime.now().isoformat(
-                        timespec="seconds"
-                    ),
-                    "Fin de jornada",
-                    lugar_cierre,
-                    "No aplica",
-                    1
-                ))
-
-                # Cierre de bitácora
-                cur.execute("""
-                    UPDATE bitacoras
-                    SET
-                        estado = 'CERRADA',
-                        lugar_cierre = ?,
-                        fecha_hora_cierre = ?
-                    WHERE id = ?
-                """, (
-                    lugar_cierre,
-                    datetime.now().isoformat(
-                        timespec="seconds"
-                    ),
-                    bitacora_id
-                ))
-
-                conn.commit()
-                conn.close()
-
-                st.success(
-                    "🏁 Jornada finalizada."
-                )
-
-                st.rerun()
-
-
-# =========================================================
-# 5. CONSULTA
-# =========================================================
-
-elif pagina == "Consultar bitácoras":
-
-    st.header("Consulta de bitácoras")
-
     bitacoras = obtener_bitacoras()
+
 
     if bitacoras.empty:
 
@@ -995,33 +1225,58 @@ elif pagina == "Consultar bitácoras":
             hide_index=True
         )
 
+
         opciones = {
-            row["identificador"]: row["id"]
-            for _, row in bitacoras.iterrows()
+            row["identificador"]:
+            row["id"]
+
+            for _, row
+            in bitacoras.iterrows()
         }
 
+
         seleccion = st.selectbox(
-            "Ver detalle",
-            opciones.keys()
+            "Seleccionar bitácora",
+            list(
+                opciones.keys()
+            ),
+            key="consulta_bitacora"
         )
+
 
         bitacora_id = opciones[
             seleccion
         ]
 
+
+        datos_bitacora = bitacoras[
+            bitacoras["id"]
+            == bitacora_id
+        ].iloc[0]
+
+
         eventos = obtener_eventos(
             bitacora_id
         )
 
-        if not eventos.empty:
 
-            # -----------------------------------------
-            # TIEMPO TRANSCURRIDO
-            # -----------------------------------------
+        st.divider()
 
-            eventos["fecha_hora_dt"] = pd.to_datetime(
+
+        if eventos.empty:
+
+            st.info(
+                "Esta bitácora todavía no tiene eventos."
+            )
+
+        else:
+
+            eventos[
+                "fecha_hora_dt"
+            ] = pd.to_datetime(
                 eventos["fecha_hora"]
             )
+
 
             inicio = eventos[
                 "fecha_hora_dt"
@@ -1031,53 +1286,133 @@ elif pagina == "Consultar bitácoras":
                 "fecha_hora_dt"
             ].max()
 
-            duracion = fin - inicio
 
-            col1, col2, col3 = st.columns(3)
+            duracion = (
+                fin - inicio
+            ).total_seconds()
 
-            col1.metric(
-                "Eventos",
-                len(eventos)
+
+            tiempos = calcular_tiempos_eventos(
+                eventos
             )
 
-            col2.metric(
-                "Inicio",
-                inicio.strftime(
-                    "%H:%M"
+
+            col1, col2, col3, col4 = st.columns(4)
+
+            with col1:
+
+                st.metric(
+                    "Eventos",
+                    len(eventos)
                 )
-            )
 
-            col3.metric(
-                "Tiempo registrado",
-                str(duracion).split(".")[0]
-            )
+            with col2:
+
+                st.metric(
+                    "Tiempo total",
+                    formatear_duracion(
+                        duracion
+                    )
+                )
+
+            with col3:
+
+                st.metric(
+                    "Movimiento",
+                    formatear_duracion(
+                        tiempos[
+                            "movimiento"
+                        ]
+                    )
+                )
+
+            with col4:
+
+                st.metric(
+                    "Espera",
+                    formatear_duracion(
+                        tiempos[
+                            "espera"
+                        ]
+                    )
+                )
+
+
+            col5, col6 = st.columns(2)
+
+            with col5:
+
+                st.metric(
+                    "Tiempo por incidencias",
+                    formatear_duracion(
+                        tiempos[
+                            "incidencia"
+                        ]
+                    )
+                )
+
+            with col6:
+
+                incidencias_total = int(
+                    eventos[
+                        "incidencia"
+                    ].sum()
+                )
+
+                st.metric(
+                    "Incidencias",
+                    incidencias_total
+                )
+
 
             st.subheader(
                 "Línea de tiempo"
             )
 
+
             vista = eventos.copy()
 
+
             vista["Hora"] = (
-                vista["fecha_hora_dt"]
-                .dt.strftime("%H:%M:%S")
+                vista[
+                    "fecha_hora_dt"
+                ].dt.strftime(
+                    "%H:%M:%S"
+                )
             )
 
-            vista["Supervisor"] = vista[
-                "supervisor_notificado"
-            ].map({
-                1: "Sí",
-                0: "No"
-            })
 
-            vista["Incidencia"] = vista[
-                "incidencia"
-            ].map({
-                1: "Sí",
-                0: "No"
-            })
+            vista["Supervisor"] = (
+                vista[
+                    "supervisor_notificado"
+                ].map({
+                    1: "Sí",
+                    0: "No"
+                })
+            )
 
-            columnas = [
+
+            vista["Incidencia"] = (
+                vista[
+                    "incidencia"
+                ].map({
+                    1: "Sí",
+                    0: "No"
+                })
+            )
+
+
+            vista["Editado"] = (
+                vista[
+                    "editado"
+                ].map({
+                    1: "Sí",
+                    0: "No"
+                })
+            )
+
+
+            columnas_vista = [
                 "Hora",
                 "tipo_evento",
                 "lugar",
@@ -1085,34 +1420,165 @@ elif pagina == "Consultar bitácoras":
                 "motivo_espera",
                 "Incidencia",
                 "Supervisor",
-                "desviacion_minutos"
+                "desviacion_minutos",
+                "Editado"
             ]
 
+
             st.dataframe(
-                vista[columnas],
+                vista[
+                    columnas_vista
+                ],
                 use_container_width=True,
                 hide_index=True
             )
 
-            # -----------------------------------------
-            # DESCARGA
-            # -----------------------------------------
 
             csv = vista[
-                columnas
+                columnas_vista
             ].to_csv(
                 index=False
             ).encode(
                 "utf-8-sig"
             )
 
+
             st.download_button(
-                "Descargar bitácora CSV",
+                "Descargar bitácora",
                 csv,
                 file_name=(
                     seleccion
-                    .replace(" ", "_")
+                    .replace(
+                        " ",
+                        "_"
+                    )
                     + ".csv"
                 ),
                 mime="text/csv"
+            )
+
+
+        # ==================================================
+        # CIERRE
+        # ==================================================
+
+        if (
+            datos_bitacora[
+                "estado"
+            ] == "ABIERTA"
+        ):
+
+            st.divider()
+
+            st.subheader(
+                "Cerrar jornada"
+            )
+
+            st.info(
+                "La jornada termina cuando el operador deja "
+                "la unidad en el lugar donde descansará."
+            )
+
+
+            lugar_cierre = st.text_input(
+                "¿Dónde quedará la unidad?",
+                placeholder=(
+                    "Ej. Casa del operador, Patio TRUGESA, "
+                    "Parador San Luis..."
+                ),
+                key="cierre_lugar"
+            )
+
+
+            cierre_notificado = st.checkbox(
+                (
+                    f"Confirmo que notifiqué al supervisor "
+                    f"{datos_bitacora['supervisor']} "
+                    "la ubicación final de la unidad."
+                ),
+                key="cierre_notificado"
+            )
+
+
+            if st.button(
+                "Finalizar jornada",
+                type="primary",
+                use_container_width=True,
+                key="btn_cerrar"
+            ):
+
+                if not lugar_cierre:
+
+                    st.error(
+                        "Debes indicar dónde quedó la unidad."
+                    )
+
+                elif not cierre_notificado:
+
+                    st.error(
+                        "Debes confirmar el aviso al supervisor."
+                    )
+
+                else:
+
+                    ahora_cierre = datetime.now()
+
+                    conn = conectar()
+                    cur = conn.cursor()
+
+
+                    cur.execute("""
+                        INSERT INTO eventos (
+                            bitacora_id,
+                            fecha_hora,
+                            tipo_evento,
+                            lugar,
+                            estado_carga,
+                            supervisor_notificado
+                        )
+                        VALUES (?, ?, ?, ?, ?, ?)
+                    """, (
+                        bitacora_id,
+                        ahora_cierre.isoformat(
+                            timespec="seconds"
+                        ),
+                        "Fin de jornada",
+                        lugar_cierre,
+                        "No aplica",
+                        1
+                    ))
+
+
+                    cur.execute("""
+                        UPDATE bitacoras
+                        SET
+                            estado = 'CERRADA',
+                            lugar_cierre = ?,
+                            fecha_hora_cierre = ?
+                        WHERE id = ?
+                    """, (
+                        lugar_cierre,
+                        ahora_cierre.isoformat(
+                            timespec="seconds"
+                        ),
+                        bitacora_id
+                    ))
+
+
+                    conn.commit()
+                    conn.close()
+
+
+                    st.success(
+                        "Jornada finalizada correctamente."
+                    )
+
+                    st.rerun()
+
+        else:
+
+            st.success(
+                f"Jornada cerrada. "
+                f"Unidad ubicada en: "
+                f"{datos_bitacora['lugar_cierre']}"
             )
